@@ -129,6 +129,15 @@ async def get_all_active() -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def set_title(link_id: int, title: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE links SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (title, link_id)
+        )
+        await db.commit()
+
+
 async def delete_link(link_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM links WHERE id = ?", (link_id,))

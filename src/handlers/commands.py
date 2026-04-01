@@ -1,11 +1,13 @@
+import asyncio
 import logging
-from aiogram import Router
+from aiogram import Router, Bot
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram import F
 
 from src.db import links as db
 from src.services.tagger import suggest_tag, retag_all
+from src import state
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -15,12 +17,17 @@ PLATFORM_EMOJI = {"youtube": "▶️", "instagram": "📸", "tiktok": "🎵", "t
                   "reddit": "🔴", "linkedin": "💼", "github": "💻", "article": "📄"}
 
 
-def _fmt_link(link: dict) -> str:
+def _fmt_link(link: dict, idx: int | None = None) -> str:
     e = PLATFORM_EMOJI.get(link.get("platform", ""), "🔗")
-    title = link.get("title") or link["url"]
-    if len(title) > 60:
-        title = title[:57] + "..."
-    return f"{e} <b>#{link['id']}</b> {title}\n    🏷 {link['tag']} · <a href='{link['url']}'>open</a>"
+    title = link.get("title", "").strip()
+    num = f"{idx}. " if idx is not None else ""
+    if not title:
+        title_line = f"  <i>no title — /title {link['id']} to set</i>"
+    else:
+        if len(title) > 60:
+            title = title[:57] + "..."
+        title_line = f"  {title}"
+    return f"{num}{e} <b>#{link['id']}</b>\n{title_line}\n  🏷 {link['tag']} · <a href='{link['url']}'>open</a>"
 
 
 def _group_by_tag(links: list[dict]) -> dict[str, list[dict]]:
@@ -85,10 +92,12 @@ async def cmd_list(message: Message, command: CommandObject):
 
     groups = _group_by_tag(links)
     parts = [f"📚 <b>{len(links)} link(s)</b>{' under ' + tag_filter if tag_filter else ''}\n"]
+    idx = 1
     for tag, items in groups.items():
         parts.append(f"\n━━━ <code>{tag}</code> ({len(items)}) ━━━")
         for link in items:
-            parts.append(_fmt_link(link))
+            parts.append(_fmt_link(link, idx=idx))
+            idx += 1
 
     await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
 
@@ -102,12 +111,15 @@ async def cmd_review(message: Message):
 
     groups = _group_by_tag(links)
     parts = [f"📚 <b>Review — {len(links)} links</b>\n"]
+    idx = 1
     for tag, items in sorted(groups.items()):
         parts.append(f"\n━━━ <code>{tag}</code> ({len(items)}) ━━━")
         for link in items:
-            e = STATUS_EMOJI.get(link["status"], "•")
-            title = (link.get("title") or link["url"])[:55]
-            parts.append(f"{e} <b>#{link['id']}</b> <a href='{link['url']}'>{title}</a>")
+            s = STATUS_EMOJI.get(link["status"], "•")
+            title = (link.get("title") or "").strip()
+            title_line = f"  {title[:60]}" if title else f"  <i>no title</i>"
+            parts.append(f"{idx}. {s} <b>#{link['id']}</b>\n{title_line}\n  <a href='{link['url']}'>open</a>")
+            idx += 1
 
     await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
 
@@ -122,8 +134,8 @@ async def cmd_find(message: Message, command: CommandObject):
         await message.answer("No results found.")
         return
     parts = [f"🔍 <b>{len(links)} result(s) for '{command.args}'</b>\n"]
-    for link in links:
-        parts.append(_fmt_link(link))
+    for idx, link in enumerate(links, 1):
+        parts.append(_fmt_link(link, idx=idx))
     await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
 
 
@@ -247,8 +259,8 @@ async def cmd_archive(message: Message, command: CommandObject):
         await message.answer(f"No archived links {label}.", parse_mode="HTML")
         return
     parts = [f"🗄 <b>Archive — {len(links)} link(s)</b>\n"]
-    for link in links:
-        parts.append(_fmt_link(link))
+    for idx, link in enumerate(links, 1):
+        parts.append(_fmt_link(link, idx=idx))
     await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
 
 
@@ -302,4 +314,182 @@ async def cb_dup_keep(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("dup_keepall:"))
 async def cb_dup_keepall(cb: CallbackQuery):
     await cb.answer("Keeping all.")
+    await cb.message.edit_reply_markup(reply_markup=None)
+
+
+# ── Reminder ──────────────────────────────────────────────────────────────────
+
+def _reminder_keyboard(link_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Done", callback_data=f"rem_done:{link_id}"),
+            InlineKeyboardButton(text="⏰ +15 min", callback_data=f"rem_snooze:{link_id}:15"),
+            InlineKeyboardButton(text="⏰ +30 min", callback_data=f"rem_snooze:{link_id}:30"),
+        ],
+        [
+            InlineKeyboardButton(text="🔜 Save for later", callback_data=f"rem_later:{link_id}"),
+        ]
+    ])
+
+
+async def _send_reminder(bot: Bot, chat_id: int, link_id: int):
+    link = await db.get_by_id(link_id)
+    if not link or link["status"] == "done":
+        return
+    title = (link.get("title") or link["url"])[:60]
+    await bot.send_message(
+        chat_id,
+        f"⏰ <b>Still reading?</b>\n\n"
+        f"<b>#{link_id}</b> — {title}\n"
+        f"🏷 {link['tag']}",
+        parse_mode="HTML",
+        reply_markup=_reminder_keyboard(link_id)
+    )
+
+
+@router.message(Command("reading"))
+async def cmd_reading(message: Message, command: CommandObject):
+    args = (command.args or "").strip().split()
+    if not args or not args[0].isdigit():
+        await message.answer(
+            "Usage:\n"
+            "/reading &lt;id&gt; — remind in 20 min (default)\n"
+            "/reading &lt;id&gt; &lt;minutes&gt; — custom time\n\n"
+            "Example: /reading 42 15",
+            parse_mode="HTML"
+        )
+        return
+
+    link_id = int(args[0])
+    minutes = int(args[1]) if len(args) > 1 and args[1].isdigit() else 20
+
+    link = await db.get_by_id(link_id)
+    if not link:
+        await message.answer(f"Link #{link_id} not found.")
+        return
+
+    # Cancel existing reminder for this link if any
+    existing = state.reminders.get(link_id)
+    if existing and not existing.done():
+        existing.cancel()
+
+    chat_id = message.chat.id
+    bot = message.bot
+
+    async def _task():
+        # Initial wait
+        await asyncio.sleep(minutes * 60)
+        # Keep sending every 5 min until user replies (task is cancelled)
+        while True:
+            link = await db.get_by_id(link_id)
+            if not link or link["status"] == "done":
+                break
+            await _send_reminder(bot, chat_id, link_id)
+            await asyncio.sleep(5 * 60)
+        state.reminders.pop(link_id, None)
+
+    state.reminders[link_id] = asyncio.create_task(_task())
+    title = (link.get("title") or link["url"])[:50]
+    await message.answer(
+        f"⏱ Reminder set for <b>#{link_id}</b> — {title}\n"
+        f"I'll check in after <b>{minutes} min</b>, then every 5 min until you reply.",
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("rem_done:"))
+async def cb_rem_done(cb: CallbackQuery):
+    link_id = int(cb.data.split(":")[1])
+    await db.set_status(link_id, "done")
+    state.reminders.pop(link_id, None)
+    await cb.answer("Marked as done!")
+    await cb.message.edit_text(
+        cb.message.text + "\n\n✅ <i>Marked as done.</i>",
+        parse_mode="HTML", reply_markup=None
+    )
+
+
+@router.callback_query(F.data.startswith("rem_snooze:"))
+async def cb_rem_snooze(cb: CallbackQuery):
+    parts = cb.data.split(":")
+    link_id, minutes = int(parts[1]), int(parts[2])
+
+    existing = state.reminders.get(link_id)
+    if existing and not existing.done():
+        existing.cancel()
+
+    chat_id = cb.message.chat.id
+    bot = cb.bot
+
+    async def _task():
+        await asyncio.sleep(minutes * 60)
+        while True:
+            link = await db.get_by_id(link_id)
+            if not link or link["status"] == "done":
+                break
+            await _send_reminder(bot, chat_id, link_id)
+            await asyncio.sleep(5 * 60)
+        state.reminders.pop(link_id, None)
+
+    state.reminders[link_id] = asyncio.create_task(_task())
+    await cb.answer(f"Snoozed {minutes} min!")
+    await cb.message.edit_reply_markup(reply_markup=None)
+
+
+@router.callback_query(F.data.startswith("rem_later:"))
+async def cb_rem_later(cb: CallbackQuery):
+    link_id = int(cb.data.split(":")[1])
+    await db.set_status(link_id, "later")
+    state.reminders.pop(link_id, None)
+    await cb.answer("Moved to later.")
+    await cb.message.edit_text(
+        cb.message.text + "\n\n🔜 <i>Saved for later.</i>",
+        parse_mode="HTML", reply_markup=None
+    )
+
+
+# ── Title editing ─────────────────────────────────────────────────────────────
+
+@router.message(Command("del"))
+async def cmd_del(message: Message, command: CommandObject):
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer("Usage: /del &lt;id&gt;\nExample: /del 5", parse_mode="HTML")
+        return
+    link_id = int(command.args.strip())
+    link = await db.get_by_id(link_id)
+    if not link:
+        await message.answer(f"Link #{link_id} not found.")
+        return
+    await db.delete_link(link_id)
+    title = link.get("title") or link["url"]
+    await message.answer(f"🗑 Deleted <b>#{link_id}</b>: {title}", parse_mode="HTML")
+
+
+@router.message(Command("title"))
+async def cmd_title(message: Message, command: CommandObject):
+    if not command.args:
+        await message.answer("Usage: /title &lt;id&gt; &lt;new title&gt;\nExample: /title 1 تعلم ريأكت هوكس", parse_mode="HTML")
+        return
+    parts = command.args.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[0].isdigit():
+        await message.answer("Usage: /title &lt;id&gt; &lt;new title&gt;", parse_mode="HTML")
+        return
+    link_id, new_title = int(parts[0]), parts[1].strip()
+    link = await db.get_by_id(link_id)
+    if not link:
+        await message.answer(f"Link #{link_id} not found.")
+        return
+    await db.set_title(link_id, new_title)
+    await message.answer(f"📝 Title updated for <b>#{link_id}</b>:\n{new_title}", parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("title_edit:"))
+async def cb_title_edit(cb: CallbackQuery):
+    link_id = int(cb.data.split(":")[1])
+    state.pending_titles[cb.from_user.id] = link_id
+    await cb.answer()
+    await cb.message.answer(
+        f"Send the new title for <b>#{link_id}</b>\nYou can write in Arabic or English.",
+        parse_mode="HTML"
+    )
     await cb.message.edit_reply_markup(reply_markup=None)

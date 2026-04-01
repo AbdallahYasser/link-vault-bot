@@ -15,11 +15,21 @@ def _similarity(a: str, b: str) -> float:
 
 def find_smart_duplicates(new_title: str, new_desc: str, existing: list[dict]) -> list[dict]:
     """Return existing links that are likely the same content as the new one."""
+    # Skip smart check entirely if new link has no title and no description
+    if not new_title.strip() and not new_desc.strip():
+        return []
+
     matches = []
     for link in existing:
-        title_score = _similarity(new_title, link.get("title", ""))
-        desc_score = _similarity(new_desc, link.get("description", ""))
-        # High title similarity is enough; description adds confidence
+        existing_title = link.get("title", "").strip()
+        existing_desc = link.get("description", "").strip()
+
+        # Skip comparison against links that also have no title/description
+        if not existing_title and not existing_desc:
+            continue
+
+        title_score = _similarity(new_title, existing_title)
+        desc_score = _similarity(new_desc, existing_desc)
         score = max(title_score, (title_score + desc_score) / 2)
         if score >= SIMILARITY_THRESHOLD:
             matches.append({**link, "_similarity": round(score, 2)})

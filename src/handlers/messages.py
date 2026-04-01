@@ -4,11 +4,10 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.db import links as db
-from src.services.scraper import fetch_metadata
 from src.services.tagger import suggest_tag
-from src.services.duplicates import find_smart_duplicates
 from src.utils.url_normalizer import normalize
 from src.utils.platform import detect
+from src import state
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -21,20 +20,9 @@ def _link_keyboard(link_id: int, suggested_tag: str) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="✅ Keep tag", callback_data=f"tag_ok:{link_id}"),
             InlineKeyboardButton(text="✏️ Change tag", callback_data=f"tag_edit:{link_id}"),
-        ]
-    ])
-
-
-def _dup_keyboard(new_url: str, existing_id: int) -> InlineKeyboardMarkup:
-    import urllib.parse
-    enc = urllib.parse.quote(new_url, safe="")
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Skip (same thing)", callback_data=f"dup_skip:{existing_id}"),
-            InlineKeyboardButton(text="➕ Save both", callback_data=f"dup_save:{enc}:{existing_id}"),
         ],
         [
-            InlineKeyboardButton(text="🔀 Merge tags", callback_data=f"dup_merge:{existing_id}"),
+            InlineKeyboardButton(text="📝 Edit title", callback_data=f"title_edit:{link_id}"),
         ]
     ])
 
@@ -58,40 +46,15 @@ async def handle_url(message: Message):
         )
         return
 
-    status_msg = await message.answer("⏳ Fetching...")
-
-    meta = await fetch_metadata(url)
-    title = meta["title"] or url
-    description = meta["description"]
-
-    # Smart duplicate check
-    all_links = await db.get_all_active()
-    smart_dups = find_smart_duplicates(title, description, all_links)
-    if smart_dups:
-        dup = smart_dups[0]
-        await status_msg.edit_text(
-            f"⚠️ <b>Similar content already saved:</b>\n\n"
-            f"<b>New:</b>\n📎 {title}\n🔗 {original_url}\n\n"
-            f"<b>Existing (#{dup['id']}):</b>\n📎 {dup['title']}\n🔗 {dup['url']}\n"
-            f"🏷 {dup['tag']}",
-            parse_mode="HTML",
-            reply_markup=_dup_keyboard(url, dup["id"])
-        )
-        return
-
-    # Get existing tags for AI context
-    tag_rows = await db.get_all_tags()
-    existing_tags = [t[0] for t in tag_rows]
-
-    suggested = await suggest_tag(title, description, platform, existing_tags)
-    link_id = await db.save(url, original_url, title, description, platform, suggested)
-
-    await status_msg.edit_text(
-        f"✅ Saved <b>#{link_id}</b>\n"
-        f"📎 {title}\n"
-        f"🏷 <code>{suggested}</code>",
-        parse_mode="HTML",
-        reply_markup=_link_keyboard(link_id, suggested)
+    state.pending_new_links[message.from_user.id] = {
+        "url": url,
+        "original_url": original_url,
+        "platform": platform,
+    }
+    await message.answer(
+        "🔗 Got it! Send me a title for this link.\n"
+        "<i>(type <code>-</code> to skip)</i>",
+        parse_mode="HTML"
     )
 
 
@@ -110,48 +73,43 @@ async def cb_tag_edit(cb: CallbackQuery):
         f"Example: <code>dev/react</code> or <code>clothes/man/winter</code>",
         parse_mode="HTML"
     )
-    # Store pending edit in bot data
-    cb.bot["pending_tag"] = cb.bot.get("pending_tag", {})
-    cb.bot["pending_tag"][cb.from_user.id] = link_id
+    state.pending_tags[cb.from_user.id] = link_id
     await cb.message.edit_reply_markup(reply_markup=None)
-
-
-@router.callback_query(F.data.startswith("dup_skip:"))
-async def cb_dup_skip(cb: CallbackQuery):
-    await cb.answer("Skipped.")
-    await cb.message.edit_text(cb.message.text + "\n\n<i>Skipped — not saved.</i>", parse_mode="HTML", reply_markup=None)
-
-
-@router.callback_query(F.data.startswith("dup_save:"))
-async def cb_dup_save(cb: CallbackQuery):
-    import urllib.parse
-    parts = cb.data.split(":", 2)
-    url = urllib.parse.unquote(parts[1])
-    await cb.answer("Saving...")
-    meta = await fetch_metadata(url)
-    tag_rows = await db.get_all_tags()
-    existing_tags = [t[0] for t in tag_rows]
-    suggested = await suggest_tag(meta["title"], meta["description"], detect(url), existing_tags)
-    link_id = await db.save(url, url, meta["title"], meta["description"], detect(url), suggested)
-    await cb.message.edit_text(
-        f"✅ Saved as <b>#{link_id}</b> under <code>{suggested}</code>",
-        parse_mode="HTML", reply_markup=None
-    )
-
-
-@router.callback_query(F.data.startswith("dup_merge:"))
-async def cb_dup_merge(cb: CallbackQuery):
-    await cb.answer("Tags merged!")
-    await cb.message.edit_text(cb.message.text + "\n\n<i>Tags merged into existing entry.</i>", parse_mode="HTML", reply_markup=None)
 
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_plain_text(message: Message):
-    pending = message.bot.get("pending_tag", {})
-    if message.from_user.id in pending:
-        link_id = pending.pop(message.from_user.id)
+    user_id = message.from_user.id
+
+    if user_id in state.pending_new_links:
+        data = state.pending_new_links.pop(user_id)
+        title = "" if message.text.strip() == "-" else message.text.strip()
+
+        status_msg = await message.answer("⏳ Tagging...")
+        tag_rows = await db.get_all_tags()
+        existing_tags = [t[0] for t in tag_rows]
+        suggested = await suggest_tag(title or data["platform"], "", data["platform"], existing_tags)
+        link_id = await db.save(data["url"], data["original_url"], title, "", data["platform"], suggested)
+
+        await status_msg.edit_text(
+            f"✅ Saved <b>#{link_id}</b>\n"
+            f"📎 {title or '(no title)'}\n"
+            f"🏷 <code>{suggested}</code>",
+            parse_mode="HTML",
+            reply_markup=_link_keyboard(link_id, suggested)
+        )
+
+    elif user_id in state.pending_titles:
+        link_id = state.pending_titles.pop(user_id)
+        new_title = message.text.strip()
+        await db.set_title(link_id, new_title)
+        await message.answer(f"📝 Title updated for <b>#{link_id}</b>:\n{new_title}", parse_mode="HTML")
+
+    elif user_id in state.pending_tags:
+        link_id = state.pending_tags.pop(user_id)
         new_tag = message.text.strip().lower().strip("/")
         await db.set_tag(link_id, new_tag)
         await message.answer(f"✅ Tag updated to <code>{new_tag}</code> for <b>#{link_id}</b>", parse_mode="HTML")
+
     else:
         await message.answer("Send a URL to save it, or use /help for commands.")
