@@ -16,6 +16,18 @@ STATUS_EMOJI = {"pinned": "📌", "unread": "1️⃣", "later": "🔜", "done": 
 PLATFORM_EMOJI = {"youtube": "▶️", "instagram": "📸", "tiktok": "🎵", "twitter": "🐦",
                   "reddit": "🔴", "linkedin": "💼", "github": "💻", "article": "📄"}
 
+_W = 28  # approximate message width in characters
+
+def _root_header(root: str, total: int) -> str:
+    label = f" {root.upper()} ({total}) "
+    side = max(3, (_W - len(label)) // 2)
+    return f"\n{'━' * side}<b>{label}</b>{'━' * side}"
+
+def _sub_header(relative: str, count: int) -> str:
+    label = f" {relative} ({count}) "
+    side = max(2, (_W - 4 - len(label)) // 2)
+    return f"\n  {'─' * side}{label}{'─' * side}"
+
 
 def _fmt_link(link: dict, idx: int | None = None, show_tag: bool = True) -> str:
     e = PLATFORM_EMOJI.get(link.get("platform", ""), "🔗")
@@ -99,12 +111,12 @@ async def cmd_list(message: Message, command: CommandObject):
     for root in sorted(roots.keys()):
         sub_map = roots[root]
         total = sum(len(v) for v in sub_map.values())
-        parts.append(f"\n━━━ <code>{root}</code> ({total}) ━━━")
+        parts.append(_root_header(root, total))
         for subtag in sorted(sub_map.keys()):
             items = sub_map[subtag]
             relative = subtag[len(root) + 1:] if len(subtag) > len(root) else ""
             if relative:
-                parts.append(f"  ─ <code>{relative}</code> ({len(items)})")
+                parts.append(_sub_header(relative, len(items)))
             for link in items:
                 parts.append(_fmt_link(link, idx=idx, show_tag=False))
                 idx += 1
@@ -125,12 +137,12 @@ async def cmd_review(message: Message):
     for root in sorted(roots.keys()):
         sub_map = roots[root]
         total = sum(len(v) for v in sub_map.values())
-        parts.append(f"\n━━━ <code>{root}</code> ({total}) ━━━")
+        parts.append(_root_header(root, total))
         for subtag in sorted(sub_map.keys()):
             items = sub_map[subtag]
             relative = subtag[len(root) + 1:] if len(subtag) > len(root) else ""
             if relative:
-                parts.append(f"  ─ <code>{relative}</code> ({len(items)})")
+                parts.append(_sub_header(relative, len(items)))
             for link in items:
                 s = STATUS_EMOJI.get(link["status"], "•")
                 title = (link.get("title") or "").strip()
