@@ -39,8 +39,6 @@ def _fmt_link(link: dict, idx: int | None = None, show_tag: bool = True) -> str:
     if not title:
         title_line = f"  <i>no title — /title {link['id']} to set</i>"
     else:
-        if len(title) > 60:
-            title = title[:57] + "..."
         title_line = f"  {title}"
     tag_part = f"🏷 {link['tag']} · " if show_tag else ""
     return f"{num}{e} <b>#{link['id']}</b>\n{title_line}\n  {tag_part}<a href='{link['url']}'>open</a>"
@@ -149,7 +147,7 @@ async def cmd_review(message: Message):
             for link in items:
                 s = STATUS_EMOJI.get(link["status"], "•")
                 title = (link.get("title") or "").strip()
-                title_line = f"  {title[:60]}" if title else f"  <i>no title</i>"
+                title_line = f"  {title}" if title else f"  <i>no title</i>"
                 parts.append(f"{idx}. {s} <b>#{link['id']}</b>\n{title_line}\n  <a href='{link['url']}'>open</a>")
                 idx += 1
 
