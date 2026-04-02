@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    volumes:
+      - link-vault-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  link-vault-data:
