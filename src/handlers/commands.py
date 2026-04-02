@@ -16,16 +16,20 @@ STATUS_EMOJI = {"pinned": "📌", "unread": "1️⃣", "later": "🔜", "done": 
 PLATFORM_EMOJI = {"youtube": "▶️", "instagram": "📸", "tiktok": "🎵", "twitter": "🐦",
                   "reddit": "🔴", "linkedin": "💼", "github": "💻", "article": "📄"}
 
-_ROOT_FILL = "━" * 5
-_SUB_FILL = "─" * 4
+_ROOT_MAX = 27   # safe max chars for Telegram mobile
+_ROOT_CAP = 8    # max fill when text is short
+_SUB_MAX  = 26
+_SUB_CAP  = 4
 
 def _root_header(root: str, total: int) -> str:
     label = f" {root.upper()} ({total}) "
-    return f"\n{_ROOT_FILL}<b>{label}</b>{_ROOT_FILL}"
+    side = min(_ROOT_CAP, max(2, (_ROOT_MAX - len(label)) // 2))
+    return f"\n{'━' * side}<b>{label}</b>{'━' * side}"
 
 def _sub_header(relative: str, count: int) -> str:
     label = f" {relative} ({count}) "
-    return f"\n  {_SUB_FILL}{label}{_SUB_FILL}"
+    side = min(_SUB_CAP, max(1, (_SUB_MAX - len(label)) // 2))
+    return f"\n  {'─' * side}{label}{'─' * side}"
 
 
 def _fmt_link(link: dict, idx: int | None = None, show_tag: bool = True) -> str:
