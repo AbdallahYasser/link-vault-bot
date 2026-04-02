@@ -16,17 +16,16 @@ STATUS_EMOJI = {"pinned": "📌", "unread": "1️⃣", "later": "🔜", "done": 
 PLATFORM_EMOJI = {"youtube": "▶️", "instagram": "📸", "tiktok": "🎵", "twitter": "🐦",
                   "reddit": "🔴", "linkedin": "💼", "github": "💻", "article": "📄"}
 
-_W = 28  # approximate message width in characters
+_ROOT_FILL = "━" * 8
+_SUB_FILL = "─" * 4
 
 def _root_header(root: str, total: int) -> str:
     label = f" {root.upper()} ({total}) "
-    side = max(3, (_W - len(label)) // 2)
-    return f"\n{'━' * side}<b>{label}</b>{'━' * side}"
+    return f"\n{_ROOT_FILL}<b>{label}</b>{_ROOT_FILL}"
 
 def _sub_header(relative: str, count: int) -> str:
     label = f" {relative} ({count}) "
-    side = max(2, (_W - 4 - len(label)) // 2)
-    return f"\n  {'─' * side}{label}{'─' * side}"
+    return f"\n  {_SUB_FILL}{label}{_SUB_FILL}"
 
 
 def _fmt_link(link: dict, idx: int | None = None, show_tag: bool = True) -> str:
