@@ -16,7 +16,7 @@ STATUS_EMOJI = {"pinned": "📌", "unread": "1️⃣", "later": "🔜", "done": 
 PLATFORM_EMOJI = {"youtube": "▶️", "instagram": "📸", "tiktok": "🎵", "twitter": "🐦",
                   "reddit": "🔴", "linkedin": "💼", "github": "💻", "article": "📄"}
 
-_ROOT_FILL = "━" * 8
+_ROOT_FILL = "━" * 5
 _SUB_FILL = "─" * 4
 
 def _root_header(root: str, total: int) -> str:
