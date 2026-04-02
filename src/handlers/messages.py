@@ -68,12 +68,50 @@ async def cb_tag_ok(cb: CallbackQuery):
 async def cb_tag_edit(cb: CallbackQuery):
     link_id = int(cb.data.split(":")[1])
     await cb.answer()
+
+    tag_rows = await db.get_all_tags()
+    buttons = []
+    row = []
+    for tag, _ in tag_rows:
+        row.append(InlineKeyboardButton(text=tag, callback_data=f"tag_set:{link_id}:{tag}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="✏️ Type new tag", callback_data=f"tag_type:{link_id}")])
+
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await cb.message.answer(
+        f"Choose a tag for <b>#{link_id}</b> or type a new one:",
+        parse_mode="HTML",
+        reply_markup=markup
+    )
+    await cb.message.edit_reply_markup(reply_markup=None)
+
+
+@router.callback_query(F.data.startswith("tag_set:"))
+async def cb_tag_set(cb: CallbackQuery):
+    parts = cb.data.split(":", 2)
+    link_id, new_tag = int(parts[1]), parts[2]
+    await db.set_tag(link_id, new_tag)
+    await cb.answer("Tag updated!")
+    await cb.message.edit_text(
+        f"✅ Tag updated to <code>{new_tag}</code> for <b>#{link_id}</b>",
+        parse_mode="HTML"
+    )
+
+
+@router.callback_query(F.data.startswith("tag_type:"))
+async def cb_tag_type(cb: CallbackQuery):
+    link_id = int(cb.data.split(":")[1])
+    await cb.answer()
+    state.pending_tags[cb.from_user.id] = link_id
     await cb.message.answer(
         f"Send the new tag for <b>#{link_id}</b>\n"
         f"Example: <code>dev/react</code> or <code>clothes/man/winter</code>",
         parse_mode="HTML"
     )
-    state.pending_tags[cb.from_user.id] = link_id
     await cb.message.edit_reply_markup(reply_markup=None)
 
 
