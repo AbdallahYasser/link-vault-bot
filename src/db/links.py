@@ -81,7 +81,7 @@ async def list_links(tag_prefix: str = None, status_filter: list = None) -> list
         query += " AND (tag = ? OR tag LIKE ?)"
         args += [tag_prefix, f"{tag_prefix}/%"]
 
-    query += " ORDER BY CASE status WHEN 'pinned' THEN 0 WHEN 'unread' THEN 1 WHEN 'later' THEN 2 END, saved_at DESC"
+    query += " ORDER BY CASE status WHEN 'pinned' THEN 0 WHEN 'unread' THEN 1 WHEN 'later' THEN 2 END, saved_at DESC, id DESC"
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

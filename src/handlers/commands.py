@@ -17,7 +17,7 @@ PLATFORM_EMOJI = {"youtube": "▶️", "instagram": "📸", "tiktok": "🎵", "t
                   "reddit": "🔴", "linkedin": "💼", "github": "💻", "article": "📄"}
 
 
-def _fmt_link(link: dict, idx: int | None = None) -> str:
+def _fmt_link(link: dict, idx: int | None = None, show_tag: bool = True) -> str:
     e = PLATFORM_EMOJI.get(link.get("platform", ""), "🔗")
     title = link.get("title", "").strip()
     num = f"{idx}. " if idx is not None else ""
@@ -27,14 +27,17 @@ def _fmt_link(link: dict, idx: int | None = None) -> str:
         if len(title) > 60:
             title = title[:57] + "..."
         title_line = f"  {title}"
-    return f"{num}{e} <b>#{link['id']}</b>\n{title_line}\n  🏷 {link['tag']} · <a href='{link['url']}'>open</a>"
+    tag_part = f"🏷 {link['tag']} · " if show_tag else ""
+    return f"{num}{e} <b>#{link['id']}</b>\n{title_line}\n  {tag_part}<a href='{link['url']}'>open</a>"
 
 
-def _group_by_tag(links: list[dict]) -> dict[str, list[dict]]:
-    groups: dict[str, list[dict]] = {}
+def _group_by_root(links: list[dict]) -> dict[str, dict[str, list[dict]]]:
+    """Group links by root tag, then by full tag. Both levels sorted alphabetically."""
+    roots: dict[str, dict[str, list[dict]]] = {}
     for link in links:
-        groups.setdefault(link["tag"], []).append(link)
-    return groups
+        root = link['tag'].split('/')[0]
+        roots.setdefault(root, {}).setdefault(link['tag'], []).append(link)
+    return roots
 
 
 @router.message(Command("start"))
@@ -90,14 +93,21 @@ async def cmd_list(message: Message, command: CommandObject):
         await message.answer(f"No unread links {label}.", parse_mode="HTML")
         return
 
-    groups = _group_by_tag(links)
     parts = [f"📚 <b>{len(links)} link(s)</b>{' under ' + tag_filter if tag_filter else ''}\n"]
     idx = 1
-    for tag, items in groups.items():
-        parts.append(f"\n━━━ <code>{tag}</code> ({len(items)}) ━━━")
-        for link in items:
-            parts.append(_fmt_link(link, idx=idx))
-            idx += 1
+    roots = _group_by_root(links)
+    for root in sorted(roots.keys()):
+        sub_map = roots[root]
+        total = sum(len(v) for v in sub_map.values())
+        parts.append(f"\n━━━ <code>{root}</code> ({total}) ━━━")
+        for subtag in sorted(sub_map.keys()):
+            items = sub_map[subtag]
+            relative = subtag[len(root) + 1:] if len(subtag) > len(root) else ""
+            if relative:
+                parts.append(f"  ─ <code>{relative}</code> ({len(items)})")
+            for link in items:
+                parts.append(_fmt_link(link, idx=idx, show_tag=False))
+                idx += 1
 
     await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
 
@@ -109,17 +119,24 @@ async def cmd_review(message: Message):
         await message.answer("No links to review. Go save some! 🎉")
         return
 
-    groups = _group_by_tag(links)
     parts = [f"📚 <b>Review — {len(links)} links</b>\n"]
     idx = 1
-    for tag, items in sorted(groups.items()):
-        parts.append(f"\n━━━ <code>{tag}</code> ({len(items)}) ━━━")
-        for link in items:
-            s = STATUS_EMOJI.get(link["status"], "•")
-            title = (link.get("title") or "").strip()
-            title_line = f"  {title[:60]}" if title else f"  <i>no title</i>"
-            parts.append(f"{idx}. {s} <b>#{link['id']}</b>\n{title_line}\n  <a href='{link['url']}'>open</a>")
-            idx += 1
+    roots = _group_by_root(links)
+    for root in sorted(roots.keys()):
+        sub_map = roots[root]
+        total = sum(len(v) for v in sub_map.values())
+        parts.append(f"\n━━━ <code>{root}</code> ({total}) ━━━")
+        for subtag in sorted(sub_map.keys()):
+            items = sub_map[subtag]
+            relative = subtag[len(root) + 1:] if len(subtag) > len(root) else ""
+            if relative:
+                parts.append(f"  ─ <code>{relative}</code> ({len(items)})")
+            for link in items:
+                s = STATUS_EMOJI.get(link["status"], "•")
+                title = (link.get("title") or "").strip()
+                title_line = f"  {title[:60]}" if title else f"  <i>no title</i>"
+                parts.append(f"{idx}. {s} <b>#{link['id']}</b>\n{title_line}\n  <a href='{link['url']}'>open</a>")
+                idx += 1
 
     await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
 
