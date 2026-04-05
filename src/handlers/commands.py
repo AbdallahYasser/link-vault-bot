@@ -91,7 +91,7 @@ async def cmd_help(message: Message):
         "/pin &lt;id&gt; — move to top\n"
         "/unpin &lt;id&gt; — back to unread\n\n"
         "<b>Duplicates</b>\n"
-        "/duplicates — scan and show all duplicate groups",
+        "/duplicates — find similar tags and merge them",
         parse_mode="HTML"
     )
 
@@ -296,54 +296,69 @@ async def cmd_archive(message: Message, command: CommandObject):
 
 @router.message(Command("duplicates"))
 async def cmd_duplicates(message: Message):
-    from src.services.duplicates import group_all_duplicates
-    msg = await message.answer("⏳ Scanning for duplicates...")
-    all_links = await db.get_all_active()
-    groups = group_all_duplicates(all_links)
-
-    if not groups:
-        await msg.edit_text("✅ No duplicates found!")
+    from src.services.duplicates import group_similar_tags
+    tag_rows = await db.get_all_tags()
+    if not tag_rows:
+        await message.answer("No tags yet.")
         return
 
-    await msg.edit_text(f"Found <b>{len(groups)} duplicate group(s)</b>. Sending details...", parse_mode="HTML")
+    tags = [t[0] for t in tag_rows]
+    tag_counts = {t: c for t, c in tag_rows}
+    groups = group_similar_tags(tags)
 
-    for i, group in enumerate(groups, 1):
-        lines = [f"━━━ Group {i} ━━━\n"]
-        for link in group:
-            title = (link.get("title") or link["url"])[:50]
-            lines.append(f"<b>#{link['id']}</b> {title}\n🏷 {link['tag']}\n🔗 {link['url']}\n")
+    if not groups:
+        await message.answer("✅ No duplicate tags found!")
+        return
 
-        buttons = []
-        for link in group:
-            buttons.append([InlineKeyboardButton(
-                text=f"Keep #{link['id']} ({link['tag']})",
-                callback_data=f"dup_keep:{link['id']}:{','.join(str(l['id']) for l in group if l['id'] != link['id'])}"
-            )])
-        buttons.append([InlineKeyboardButton(text="Keep all", callback_data=f"dup_keepall:{i}")])
+    await message.answer(f"Found <b>{len(groups)} duplicate tag group(s)</b>:", parse_mode="HTML")
+
+    for i, group in enumerate(groups):
+        state.tag_merge_groups[i] = group
+
+        lines = "\n".join(
+            f"🏷 <code>{tag}</code> — {tag_counts.get(tag, 0)} link(s)"
+            for tag in group
+        )
+        buttons = [
+            [InlineKeyboardButton(text=f"Keep \"{tag}\"", callback_data=f"tagmerge:{i}:{tag}")]
+            for tag in group
+        ]
+        buttons.append([InlineKeyboardButton(text="Skip", callback_data=f"tagskip:{i}")])
 
         await message.answer(
-            "\n".join(lines),
+            f"Similar tags:\n{lines}\n\nWhich one to keep?",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            disable_web_page_preview=True
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
         )
 
 
-@router.callback_query(F.data.startswith("dup_keep:"))
-async def cb_dup_keep(cb: CallbackQuery):
-    parts = cb.data.split(":")
-    keep_id = int(parts[1])
-    delete_ids = [int(x) for x in parts[2].split(",") if x]
-    for did in delete_ids:
-        await db.delete_link(did)
-    await cb.answer(f"Kept #{keep_id}, deleted {len(delete_ids)} duplicate(s).")
-    await cb.message.edit_reply_markup(reply_markup=None)
-    await cb.message.answer(f"✅ Kept <b>#{keep_id}</b>, removed {len(delete_ids)} duplicate(s).", parse_mode="HTML")
+@router.callback_query(F.data.startswith("tagmerge:"))
+async def cb_tag_merge(cb: CallbackQuery):
+    parts = cb.data.split(":", 2)
+    group_id, keep_tag = int(parts[1]), parts[2]
+    group = state.tag_merge_groups.pop(group_id, None)
+    if not group:
+        await cb.answer("Already handled.")
+        await cb.message.edit_reply_markup(reply_markup=None)
+        return
+
+    discard_tags = [t for t in group if t != keep_tag]
+    for tag in discard_tags:
+        await db.retag_links(tag, keep_tag)
+
+    await cb.answer("Done!")
+    discarded = ", ".join(f'"{t}"' for t in discard_tags)
+    await cb.message.edit_text(
+        f"✅ Kept <code>{keep_tag}</code>\n🔀 Merged {discarded} into it.",
+        parse_mode="HTML"
+    )
 
 
-@router.callback_query(F.data.startswith("dup_keepall:"))
-async def cb_dup_keepall(cb: CallbackQuery):
-    await cb.answer("Keeping all.")
+@router.callback_query(F.data.startswith("tagskip:"))
+async def cb_tag_skip(cb: CallbackQuery):
+    group_id = int(cb.data.split(":")[1])
+    state.tag_merge_groups.pop(group_id, None)
+    await cb.answer("Skipped.")
     await cb.message.edit_reply_markup(reply_markup=None)
 
 

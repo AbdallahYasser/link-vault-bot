@@ -142,3 +142,12 @@ async def delete_link(link_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM links WHERE id = ?", (link_id,))
         await db.commit()
+
+
+async def retag_links(old_tag: str, new_tag: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE links SET tag = ?, updated_at = CURRENT_TIMESTAMP WHERE tag = ?",
+            (new_tag, old_tag)
+        )
+        await db.commit()
