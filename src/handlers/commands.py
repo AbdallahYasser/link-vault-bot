@@ -272,7 +272,7 @@ async def cmd_retag(message: Message, command: CommandObject):
             return
         tag_rows = await db.get_all_tags()
         existing_tags = [t[0] for t in tag_rows]
-        new_tag = await suggest_tag(link["title"], link["description"], link["platform"], existing_tags)
+        new_tag = await suggest_tag(link["title"], link["platform"], existing_tags)
         await db.set_tag(link_id, new_tag)
         await message.answer(f"🏷 #{link_id} re-tagged to <code>{new_tag}</code>", parse_mode="HTML")
         return

@@ -6,14 +6,13 @@ logger = logging.getLogger(__name__)
 _groq_rotator = KeyRotator(GROQ_KEYS, "Groq")
 
 
-async def suggest_tag(title: str, description: str, platform: str, existing_tags: list[str]) -> str:
+async def suggest_tag(title: str, platform: str, existing_tags: list[str]) -> str:
     """Ask AI to suggest a hierarchical tag for the given content."""
     tags_hint = "\n".join(existing_tags[:50]) if existing_tags else "none yet"
     prompt = f"""You are a personal content organizer. Suggest ONE tag for this saved link.
 
 Platform: {platform}
 Title: {title}
-Description: {description[:300]}
 
 Existing tags in the user's system (use these when relevant, or create a new one):
 {tags_hint}
@@ -48,7 +47,6 @@ async def retag_all(links: list[dict], existing_tags: list[str]) -> list[tuple[i
         try:
             new_tag = await suggest_tag(
                 link.get("title", ""),
-                link.get("description", ""),
                 link.get("platform", "article"),
                 existing_tags,
             )

@@ -39,12 +39,12 @@ async def get_by_id(link_id: int) -> dict | None:
             return dict(row) if row else None
 
 
-async def save(url: str, original_url: str, title: str, description: str, platform: str, tag: str) -> int:
+async def save(url: str, original_url: str, title: str, platform: str, tag: str) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            """INSERT INTO links (url, original_url, title, description, platform, tag)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (url, original_url, title or "", description or "", platform, tag)
+            """INSERT INTO links (url, original_url, title, platform, tag)
+               VALUES (?, ?, ?, ?, ?)""",
+            (url, original_url, title or "", platform, tag)
         )
         await db.commit()
         return cur.lastrowid

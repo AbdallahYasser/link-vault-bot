@@ -126,8 +126,8 @@ async def handle_plain_text(message: Message):
         status_msg = await message.answer("⏳ Tagging...")
         tag_rows = await db.get_all_tags()
         existing_tags = [t[0] for t in tag_rows]
-        suggested = await suggest_tag(title or data["platform"], "", data["platform"], existing_tags)
-        link_id = await db.save(data["url"], data["original_url"], title, "", data["platform"], suggested)
+        suggested = await suggest_tag(title or data["platform"], data["platform"], existing_tags)
+        link_id = await db.save(data["url"], data["original_url"], title, data["platform"], suggested)
 
         await status_msg.edit_text(
             f"✅ Saved <b>#{link_id}</b>\n"
