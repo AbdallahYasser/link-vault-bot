@@ -53,17 +53,6 @@ async def init_db():
         await db.commit()
 
 
-async def claim_unclaimed(user_id: int) -> int:
-    """Assign all user_id=0 links to this user. Returns count claimed."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "UPDATE links SET user_id = ? WHERE user_id = 0",
-            (user_id,)
-        )
-        await db.commit()
-        return cur.rowcount
-
-
 async def get_by_url(url: str, user_id: int) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row

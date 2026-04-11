@@ -91,9 +91,7 @@ async def cmd_help(message: Message):
         "/pin &lt;id&gt; — move to top\n"
         "/unpin &lt;id&gt; — back to unread\n\n"
         "<b>Duplicates</b>\n"
-        "/duplicates — find similar tags and merge them\n\n"
-        "<b>Account</b>\n"
-        "/claim — adopt any unclaimed links (run once after first setup)",
+        "/duplicates — find similar tags and merge them",
         parse_mode="HTML"
     )
 
@@ -375,16 +373,6 @@ async def cb_tag_skip(cb: CallbackQuery):
     state.tag_merge_groups.pop(group_id, None)
     await cb.answer("Skipped.")
     await cb.message.edit_reply_markup(reply_markup=None)
-
-
-@router.message(Command("claim"))
-async def cmd_claim(message: Message):
-    user_id = message.from_user.id
-    count = await db.claim_unclaimed(user_id)
-    if count:
-        await message.answer(f"✅ Claimed <b>{count}</b> link(s) — they're now yours.", parse_mode="HTML")
-    else:
-        await message.answer("No unclaimed links to adopt.")
 
 
 # ── Reminder ──────────────────────────────────────────────────────────────────
