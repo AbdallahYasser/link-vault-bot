@@ -50,9 +50,9 @@ async def retag_all(links: list[dict], existing_tags: list[str]) -> list[tuple[i
                 link.get("platform", "article"),
                 existing_tags,
             )
-            results.append((link["id"], new_tag))
+            results.append((link["user_link_id"], new_tag))
         except Exception as e:
-            logger.warning(f"retag failed for link {link['id']}: {e}")
+            logger.warning(f"retag failed for link {link['user_link_id']}: {e}")
     return results
 
 

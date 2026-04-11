@@ -151,7 +151,7 @@ async def cmd_review(message: Message):
                 s = STATUS_EMOJI.get(link["status"], "•")
                 title = (link.get("title") or "").strip()
                 title_line = f"  {title}" if title else f"  <i>no title</i>"
-                parts.append(f"{idx}. {s} <b>#{link['id']}</b>\n{title_line}\n  <a href='{link['url']}'>open</a>")
+                parts.append(f"{idx}. {s} <b>#{link['user_link_id']}</b>\n{title_line}\n  <a href='{link['url']}'>open</a>")
                 idx += 1
 
     await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
@@ -268,7 +268,7 @@ async def cmd_retag(message: Message, command: CommandObject):
         results = await retag_all(links, existing_tags)
         changed = 0
         for link_id, new_tag in results:
-            old = next((l["tag"] for l in links if l["id"] == link_id), "")
+            old = next((l["tag"] for l in links if l["user_link_id"] == link_id), "")
             if old != new_tag:
                 await db.set_tag(link_id, new_tag, user_id)
                 changed += 1

@@ -40,7 +40,7 @@ async def handle_url(message: Message):
     existing = await db.get_by_url(url, message.from_user.id)
     if existing:
         await message.answer(
-            f"⛔ Already saved as <b>#{existing['id']}</b> [{existing['tag']}]\n"
+            f"⛔ Already saved as <b>#{existing['user_link_id']}</b> [{existing['tag']}]\n"
             f"🔗 {existing['url']}",
             parse_mode="HTML"
         )
