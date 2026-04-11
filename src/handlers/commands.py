@@ -36,12 +36,13 @@ def _fmt_link(link: dict, idx: int | None = None, show_tag: bool = True) -> str:
     e = PLATFORM_EMOJI.get(link.get("platform", ""), "🔗")
     title = link.get("title", "").strip()
     num = f"{idx}. " if idx is not None else ""
+    lid = link['user_link_id']
     if not title:
-        title_line = f"  <i>no title — /title {link['id']} to set</i>"
+        title_line = f"  <i>no title — /title {lid} to set</i>"
     else:
         title_line = f"  {title}"
     tag_part = f"🏷 {link['tag']} · " if show_tag else ""
-    return f"{num}{e} <b>#{link['id']}</b>\n{title_line}\n  {tag_part}<a href='{link['url']}'>open</a>"
+    return f"{num}{e} <b>#{lid}</b>\n{title_line}\n  {tag_part}<a href='{link['url']}'>open</a>"
 
 
 def _group_by_root(links: list[dict]) -> dict[str, dict[str, list[dict]]]:
@@ -395,13 +396,14 @@ async def _send_reminder(bot: Bot, chat_id: int, link_id: int, user_id: int):
     if not link or link["status"] == "done":
         return
     title = (link.get("title") or link["url"])[:60]
+    lid = link["user_link_id"]
     await bot.send_message(
         chat_id,
         f"⏰ <b>Still reading?</b>\n\n"
-        f"<b>#{link_id}</b> — {title}\n"
+        f"<b>#{lid}</b> — {title}\n"
         f"🏷 {link['tag']}",
         parse_mode="HTML",
-        reply_markup=_reminder_keyboard(link_id)
+        reply_markup=_reminder_keyboard(lid)
     )
 
 
@@ -428,7 +430,7 @@ async def cmd_reading(message: Message, command: CommandObject):
         return
 
     # Cancel existing reminder for this link if any
-    existing = state.reminders.get(link_id)
+    existing = state.reminders.get((user_id, link_id))
     if existing and not existing.done():
         existing.cancel()
 
@@ -443,9 +445,9 @@ async def cmd_reading(message: Message, command: CommandObject):
                 break
             await _send_reminder(bot, chat_id, link_id, user_id)
             await asyncio.sleep(5 * 60)
-        state.reminders.pop(link_id, None)
+        state.reminders.pop((user_id, link_id), None)
 
-    state.reminders[link_id] = asyncio.create_task(_task())
+    state.reminders[(user_id, link_id)] = asyncio.create_task(_task())
     title = (link.get("title") or link["url"])[:50]
     await message.answer(
         f"⏱ Reminder set for <b>#{link_id}</b> — {title}\n"
@@ -459,7 +461,7 @@ async def cb_rem_done(cb: CallbackQuery):
     link_id = int(cb.data.split(":")[1])
     user_id = cb.from_user.id
     await db.set_status(link_id, "done", user_id)
-    state.reminders.pop(link_id, None)
+    state.reminders.pop((user_id, link_id), None)
     await cb.answer("Marked as done!")
     await cb.message.edit_text(
         cb.message.text + "\n\n✅ <i>Marked as done.</i>",
@@ -473,7 +475,7 @@ async def cb_rem_snooze(cb: CallbackQuery):
     link_id, minutes = int(parts[1]), int(parts[2])
     user_id = cb.from_user.id
 
-    existing = state.reminders.get(link_id)
+    existing = state.reminders.get((user_id, link_id))
     if existing and not existing.done():
         existing.cancel()
 
@@ -488,9 +490,9 @@ async def cb_rem_snooze(cb: CallbackQuery):
                 break
             await _send_reminder(bot, chat_id, link_id, user_id)
             await asyncio.sleep(5 * 60)
-        state.reminders.pop(link_id, None)
+        state.reminders.pop((user_id, link_id), None)
 
-    state.reminders[link_id] = asyncio.create_task(_task())
+    state.reminders[(user_id, link_id)] = asyncio.create_task(_task())
     await cb.answer(f"Snoozed {minutes} min!")
     await cb.message.edit_reply_markup(reply_markup=None)
 
@@ -500,7 +502,7 @@ async def cb_rem_later(cb: CallbackQuery):
     link_id = int(cb.data.split(":")[1])
     user_id = cb.from_user.id
     await db.set_status(link_id, "later", user_id)
-    state.reminders.pop(link_id, None)
+    state.reminders.pop((user_id, link_id), None)
     await cb.answer("Moved to later.")
     await cb.message.edit_text(
         cb.message.text + "\n\n🔜 <i>Saved for later.</i>",

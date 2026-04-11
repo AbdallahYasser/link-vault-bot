@@ -9,6 +9,7 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS links (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id      INTEGER NOT NULL DEFAULT 0,
+                user_link_id INTEGER NOT NULL DEFAULT 0,
                 url          TEXT NOT NULL,
                 original_url TEXT NOT NULL,
                 title        TEXT,
@@ -22,9 +23,10 @@ async def init_db():
                 UNIQUE(url, user_id)
             )
         """)
-        # Migration: rebuild table with user_id if the column is missing (old schema)
         async with db.execute("PRAGMA table_info(links)") as cur:
             columns = {row[1] for row in await cur.fetchall()}
+
+        # Migration: add user_id if missing (very old schema)
         if "user_id" not in columns:
             await db.execute("DROP TABLE IF EXISTS links_old")
             await db.execute("ALTER TABLE links RENAME TO links_old")
@@ -32,6 +34,7 @@ async def init_db():
                 CREATE TABLE links (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id      INTEGER NOT NULL DEFAULT 0,
+                    user_link_id INTEGER NOT NULL DEFAULT 0,
                     url          TEXT NOT NULL,
                     original_url TEXT NOT NULL,
                     title        TEXT,
@@ -46,44 +49,70 @@ async def init_db():
                 )
             """)
             await db.execute("""
-                INSERT INTO links (user_id, url, original_url, title, description, platform, tag, status, saved_at, updated_at, done_at)
-                SELECT 0, url, original_url, title, description, platform, tag, status, saved_at, updated_at, done_at FROM links_old
+                INSERT INTO links (user_id, user_link_id, url, original_url, title, description, platform, tag, status, saved_at, updated_at, done_at)
+                SELECT 0, 0, url, original_url, title, description, platform, tag, status, saved_at, updated_at, done_at FROM links_old
             """)
             await db.execute("DROP TABLE links_old")
+
+        # Migration: add user_link_id if missing
+        elif "user_link_id" not in columns:
+            await db.execute("ALTER TABLE links ADD COLUMN user_link_id INTEGER NOT NULL DEFAULT 0")
+            # Backfill: assign sequential IDs per user ordered by global id
+            await db.execute("""
+                UPDATE links SET user_link_id = (
+                    SELECT COUNT(*) FROM links l2
+                    WHERE l2.user_id = links.user_id AND l2.id <= links.id
+                )
+            """)
+
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_link ON links (user_id, user_link_id)"
+        )
         await db.commit()
 
 
 async def get_by_url(url: str, user_id: int) -> dict | None:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM links WHERE url = ? AND user_id = ?", (url, user_id)) as cur:
+        async with db.execute(
+            "SELECT * FROM links WHERE url = ? AND user_id = ?", (url, user_id)
+        ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
 
 
 async def get_by_id(link_id: int, user_id: int) -> dict | None:
+    """link_id is the user-facing user_link_id."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM links WHERE id = ? AND user_id = ?", (link_id, user_id)) as cur:
+        async with db.execute(
+            "SELECT * FROM links WHERE user_link_id = ? AND user_id = ?", (link_id, user_id)
+        ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
 
 
 async def save(url: str, original_url: str, title: str, platform: str, tag: str, user_id: int) -> int:
+    """Returns the user-facing user_link_id."""
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """INSERT INTO links (url, original_url, title, platform, tag, user_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (url, original_url, title or "", platform, tag, user_id)
+        async with db.execute(
+            "SELECT COALESCE(MAX(user_link_id), 0) + 1 FROM links WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            user_link_id = row[0]
+        await db.execute(
+            """INSERT INTO links (url, original_url, title, platform, tag, user_id, user_link_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (url, original_url, title or "", platform, tag, user_id, user_link_id)
         )
         await db.commit()
-        return cur.lastrowid
+        return user_link_id
 
 
 async def set_tag(link_id: int, tag: str, user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE links SET tag = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            "UPDATE links SET tag = ?, updated_at = CURRENT_TIMESTAMP WHERE user_link_id = ? AND user_id = ?",
             (tag, link_id, user_id)
         )
         await db.commit()
@@ -93,7 +122,7 @@ async def set_status(link_id: int, status: str, user_id: int):
     done_at = datetime.utcnow().isoformat() if status == "done" else None
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE links SET status = ?, done_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            "UPDATE links SET status = ?, done_at = ?, updated_at = CURRENT_TIMESTAMP WHERE user_link_id = ? AND user_id = ?",
             (status, done_at, link_id, user_id)
         )
         await db.commit()
@@ -111,7 +140,7 @@ async def list_links(user_id: int, tag_prefix: str = None, status_filter: list =
         query += " AND (tag = ? OR tag LIKE ?)"
         args += [tag_prefix, f"{tag_prefix}/%"]
 
-    query += " ORDER BY CASE status WHEN 'pinned' THEN 0 WHEN 'unread' THEN 1 WHEN 'later' THEN 2 END, saved_at DESC, id DESC"
+    query += " ORDER BY CASE status WHEN 'pinned' THEN 0 WHEN 'unread' THEN 1 WHEN 'later' THEN 2 END, saved_at DESC, user_link_id DESC"
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -166,7 +195,7 @@ async def get_all_active(user_id: int) -> list[dict]:
 async def set_title(link_id: int, title: str, user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "UPDATE links SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            "UPDATE links SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE user_link_id = ? AND user_id = ?",
             (title, link_id, user_id)
         )
         await db.commit()
@@ -174,7 +203,9 @@ async def set_title(link_id: int, title: str, user_id: int):
 
 async def delete_link(link_id: int, user_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM links WHERE id = ? AND user_id = ?", (link_id, user_id))
+        await db.execute(
+            "DELETE FROM links WHERE user_link_id = ? AND user_id = ?", (link_id, user_id)
+        )
         await db.commit()
 
 
