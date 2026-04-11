@@ -37,7 +37,7 @@ async def handle_url(message: Message):
     platform = detect(url)
 
     # Exact duplicate check
-    existing = await db.get_by_url(url)
+    existing = await db.get_by_url(url, message.from_user.id)
     if existing:
         await message.answer(
             f"⛔ Already saved as <b>#{existing['id']}</b> [{existing['tag']}]\n"
@@ -69,7 +69,7 @@ async def cb_tag_edit(cb: CallbackQuery):
     link_id = int(cb.data.split(":")[1])
     await cb.answer()
 
-    tag_rows = await db.get_all_tags()
+    tag_rows = await db.get_all_tags(cb.from_user.id)
     buttons = []
     row = []
     for tag, _ in tag_rows:
@@ -94,7 +94,7 @@ async def cb_tag_edit(cb: CallbackQuery):
 async def cb_tag_set(cb: CallbackQuery):
     parts = cb.data.split(":", 2)
     link_id, new_tag = int(parts[1]), parts[2]
-    await db.set_tag(link_id, new_tag)
+    await db.set_tag(link_id, new_tag, cb.from_user.id)
     await cb.answer("Tag updated!")
     await cb.message.edit_text(
         f"✅ Tag updated to <code>{new_tag}</code> for <b>#{link_id}</b>",
@@ -124,10 +124,10 @@ async def handle_plain_text(message: Message):
         title = "" if message.text.strip() == "-" else message.text.strip()
 
         status_msg = await message.answer("⏳ Tagging...")
-        tag_rows = await db.get_all_tags()
+        tag_rows = await db.get_all_tags(user_id)
         existing_tags = [t[0] for t in tag_rows]
         suggested = await suggest_tag(title or data["platform"], data["platform"], existing_tags)
-        link_id = await db.save(data["url"], data["original_url"], title, data["platform"], suggested)
+        link_id = await db.save(data["url"], data["original_url"], title, data["platform"], suggested, user_id)
 
         await status_msg.edit_text(
             f"✅ Saved <b>#{link_id}</b>\n"
@@ -140,13 +140,13 @@ async def handle_plain_text(message: Message):
     elif user_id in state.pending_titles:
         link_id = state.pending_titles.pop(user_id)
         new_title = message.text.strip()
-        await db.set_title(link_id, new_title)
+        await db.set_title(link_id, new_title, user_id)
         await message.answer(f"📝 Title updated for <b>#{link_id}</b>:\n{new_title}", parse_mode="HTML")
 
     elif user_id in state.pending_tags:
         link_id = state.pending_tags.pop(user_id)
         new_tag = message.text.strip().lower().strip("/")
-        await db.set_tag(link_id, new_tag)
+        await db.set_tag(link_id, new_tag, user_id)
         await message.answer(f"✅ Tag updated to <code>{new_tag}</code> for <b>#{link_id}</b>", parse_mode="HTML")
 
     else:

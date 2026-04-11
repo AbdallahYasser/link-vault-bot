@@ -91,15 +91,18 @@ async def cmd_help(message: Message):
         "/pin &lt;id&gt; — move to top\n"
         "/unpin &lt;id&gt; — back to unread\n\n"
         "<b>Duplicates</b>\n"
-        "/duplicates — find similar tags and merge them",
+        "/duplicates — find similar tags and merge them\n\n"
+        "<b>Account</b>\n"
+        "/claim — adopt any unclaimed links (run once after first setup)",
         parse_mode="HTML"
     )
 
 
 @router.message(Command("list"))
 async def cmd_list(message: Message, command: CommandObject):
+    user_id = message.from_user.id
     tag_filter = command.args.strip().lower() if command.args else None
-    links = await db.list_links(tag_prefix=tag_filter)
+    links = await db.list_links(user_id, tag_prefix=tag_filter)
 
     if not links:
         label = f"under <code>{tag_filter}</code>" if tag_filter else "saved"
@@ -127,7 +130,8 @@ async def cmd_list(message: Message, command: CommandObject):
 
 @router.message(Command("review"))
 async def cmd_review(message: Message):
-    links = await db.list_links()
+    user_id = message.from_user.id
+    links = await db.list_links(user_id)
     if not links:
         await message.answer("No links to review. Go save some! 🎉")
         return
@@ -159,7 +163,8 @@ async def cmd_find(message: Message, command: CommandObject):
     if not command.args:
         await message.answer("Usage: /find &lt;keyword&gt;", parse_mode="HTML")
         return
-    links = await db.search_links(command.args.strip())
+    user_id = message.from_user.id
+    links = await db.search_links(command.args.strip(), user_id)
     if not links:
         await message.answer("No results found.")
         return
@@ -171,7 +176,8 @@ async def cmd_find(message: Message, command: CommandObject):
 
 @router.message(Command("tags"))
 async def cmd_tags(message: Message):
-    rows = await db.get_all_tags()
+    user_id = message.from_user.id
+    rows = await db.get_all_tags(user_id)
     if not rows:
         await message.answer("No tags yet.")
         return
@@ -188,12 +194,13 @@ async def cmd_done(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Usage: /done &lt;id&gt;", parse_mode="HTML")
         return
+    user_id = message.from_user.id
     link_id = int(command.args.strip())
-    link = await db.get_by_id(link_id)
+    link = await db.get_by_id(link_id, user_id)
     if not link:
         await message.answer(f"Link #{link_id} not found.")
         return
-    await db.set_status(link_id, "done")
+    await db.set_status(link_id, "done", user_id)
     await message.answer(f"✅ #{link_id} archived.")
 
 
@@ -202,8 +209,9 @@ async def cmd_later(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Usage: /later &lt;id&gt;", parse_mode="HTML")
         return
+    user_id = message.from_user.id
     link_id = int(command.args.strip())
-    await db.set_status(link_id, "later")
+    await db.set_status(link_id, "later", user_id)
     await message.answer(f"🔜 #{link_id} moved to later.")
 
 
@@ -212,8 +220,9 @@ async def cmd_pin(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Usage: /pin &lt;id&gt;", parse_mode="HTML")
         return
+    user_id = message.from_user.id
     link_id = int(command.args.strip())
-    await db.set_status(link_id, "pinned")
+    await db.set_status(link_id, "pinned", user_id)
     await message.answer(f"📌 #{link_id} pinned.")
 
 
@@ -222,8 +231,9 @@ async def cmd_unpin(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Usage: /unpin &lt;id&gt;", parse_mode="HTML")
         return
+    user_id = message.from_user.id
     link_id = int(command.args.strip())
-    await db.set_status(link_id, "unread")
+    await db.set_status(link_id, "unread", user_id)
     await message.answer(f"✅ #{link_id} unpinned.")
 
 
@@ -236,44 +246,46 @@ async def cmd_tag(message: Message, command: CommandObject):
     if len(parts) != 2 or not parts[0].isdigit():
         await message.answer("Usage: /tag &lt;id&gt; &lt;tag&gt;\nExample: /tag 42 dev/react", parse_mode="HTML")
         return
+    user_id = message.from_user.id
     link_id, new_tag = int(parts[0]), parts[1].lower().strip("/")
-    link = await db.get_by_id(link_id)
+    link = await db.get_by_id(link_id, user_id)
     if not link:
         await message.answer(f"Link #{link_id} not found.")
         return
-    await db.set_tag(link_id, new_tag)
+    await db.set_tag(link_id, new_tag, user_id)
     await message.answer(f"🏷 #{link_id} tag updated to <code>{new_tag}</code>", parse_mode="HTML")
 
 
 @router.message(Command("retag"))
 async def cmd_retag(message: Message, command: CommandObject):
     arg = (command.args or "").strip().lower()
+    user_id = message.from_user.id
 
     if arg == "all":
         msg = await message.answer("⏳ Re-tagging all links with AI...")
-        links = await db.get_all_active()
-        tag_rows = await db.get_all_tags()
+        links = await db.get_all_active(user_id)
+        tag_rows = await db.get_all_tags(user_id)
         existing_tags = [t[0] for t in tag_rows]
         results = await retag_all(links, existing_tags)
         changed = 0
         for link_id, new_tag in results:
             old = next((l["tag"] for l in links if l["id"] == link_id), "")
             if old != new_tag:
-                await db.set_tag(link_id, new_tag)
+                await db.set_tag(link_id, new_tag, user_id)
                 changed += 1
         await msg.edit_text(f"✅ Re-tagged {len(results)} links, {changed} changed.")
         return
 
     if arg.isdigit():
         link_id = int(arg)
-        link = await db.get_by_id(link_id)
+        link = await db.get_by_id(link_id, user_id)
         if not link:
             await message.answer(f"Link #{link_id} not found.")
             return
-        tag_rows = await db.get_all_tags()
+        tag_rows = await db.get_all_tags(user_id)
         existing_tags = [t[0] for t in tag_rows]
         new_tag = await suggest_tag(link["title"], link["platform"], existing_tags)
-        await db.set_tag(link_id, new_tag)
+        await db.set_tag(link_id, new_tag, user_id)
         await message.answer(f"🏷 #{link_id} re-tagged to <code>{new_tag}</code>", parse_mode="HTML")
         return
 
@@ -282,8 +294,9 @@ async def cmd_retag(message: Message, command: CommandObject):
 
 @router.message(Command("archive"))
 async def cmd_archive(message: Message, command: CommandObject):
+    user_id = message.from_user.id
     tag_filter = command.args.strip().lower() if command.args else None
-    links = await db.list_archive(tag_prefix=tag_filter)
+    links = await db.list_archive(user_id, tag_prefix=tag_filter)
     if not links:
         label = f"under <code>{tag_filter}</code>" if tag_filter else ""
         await message.answer(f"No archived links {label}.", parse_mode="HTML")
@@ -297,7 +310,8 @@ async def cmd_archive(message: Message, command: CommandObject):
 @router.message(Command("duplicates"))
 async def cmd_duplicates(message: Message):
     from src.services.duplicates import group_similar_tags
-    tag_rows = await db.get_all_tags()
+    user_id = message.from_user.id
+    tag_rows = await db.get_all_tags(user_id)
     if not tag_rows:
         await message.answer("No tags yet.")
         return
@@ -313,7 +327,7 @@ async def cmd_duplicates(message: Message):
     await message.answer(f"Found <b>{len(groups)} duplicate tag group(s)</b>:", parse_mode="HTML")
 
     for i, group in enumerate(groups):
-        state.tag_merge_groups[i] = group
+        state.tag_merge_groups[i] = (user_id, group)
 
         lines = "\n".join(
             f"🏷 <code>{tag}</code> — {tag_counts.get(tag, 0)} link(s)"
@@ -336,15 +350,16 @@ async def cmd_duplicates(message: Message):
 async def cb_tag_merge(cb: CallbackQuery):
     parts = cb.data.split(":", 2)
     group_id, keep_tag = int(parts[1]), parts[2]
-    group = state.tag_merge_groups.pop(group_id, None)
-    if not group:
+    entry = state.tag_merge_groups.pop(group_id, None)
+    if not entry:
         await cb.answer("Already handled.")
         await cb.message.edit_reply_markup(reply_markup=None)
         return
 
+    user_id, group = entry
     discard_tags = [t for t in group if t != keep_tag]
     for tag in discard_tags:
-        await db.retag_links(tag, keep_tag)
+        await db.retag_links(tag, keep_tag, user_id)
 
     await cb.answer("Done!")
     discarded = ", ".join(f'"{t}"' for t in discard_tags)
@@ -362,6 +377,16 @@ async def cb_tag_skip(cb: CallbackQuery):
     await cb.message.edit_reply_markup(reply_markup=None)
 
 
+@router.message(Command("claim"))
+async def cmd_claim(message: Message):
+    user_id = message.from_user.id
+    count = await db.claim_unclaimed(user_id)
+    if count:
+        await message.answer(f"✅ Claimed <b>{count}</b> link(s) — they're now yours.", parse_mode="HTML")
+    else:
+        await message.answer("No unclaimed links to adopt.")
+
+
 # ── Reminder ──────────────────────────────────────────────────────────────────
 
 def _reminder_keyboard(link_id: int) -> InlineKeyboardMarkup:
@@ -377,8 +402,8 @@ def _reminder_keyboard(link_id: int) -> InlineKeyboardMarkup:
     ])
 
 
-async def _send_reminder(bot: Bot, chat_id: int, link_id: int):
-    link = await db.get_by_id(link_id)
+async def _send_reminder(bot: Bot, chat_id: int, link_id: int, user_id: int):
+    link = await db.get_by_id(link_id, user_id)
     if not link or link["status"] == "done":
         return
     title = (link.get("title") or link["url"])[:60]
@@ -405,10 +430,11 @@ async def cmd_reading(message: Message, command: CommandObject):
         )
         return
 
+    user_id = message.from_user.id
     link_id = int(args[0])
     minutes = int(args[1]) if len(args) > 1 and args[1].isdigit() else 20
 
-    link = await db.get_by_id(link_id)
+    link = await db.get_by_id(link_id, user_id)
     if not link:
         await message.answer(f"Link #{link_id} not found.")
         return
@@ -422,14 +448,12 @@ async def cmd_reading(message: Message, command: CommandObject):
     bot = message.bot
 
     async def _task():
-        # Initial wait
         await asyncio.sleep(minutes * 60)
-        # Keep sending every 5 min until user replies (task is cancelled)
         while True:
-            link = await db.get_by_id(link_id)
+            link = await db.get_by_id(link_id, user_id)
             if not link or link["status"] == "done":
                 break
-            await _send_reminder(bot, chat_id, link_id)
+            await _send_reminder(bot, chat_id, link_id, user_id)
             await asyncio.sleep(5 * 60)
         state.reminders.pop(link_id, None)
 
@@ -445,7 +469,8 @@ async def cmd_reading(message: Message, command: CommandObject):
 @router.callback_query(F.data.startswith("rem_done:"))
 async def cb_rem_done(cb: CallbackQuery):
     link_id = int(cb.data.split(":")[1])
-    await db.set_status(link_id, "done")
+    user_id = cb.from_user.id
+    await db.set_status(link_id, "done", user_id)
     state.reminders.pop(link_id, None)
     await cb.answer("Marked as done!")
     await cb.message.edit_text(
@@ -458,6 +483,7 @@ async def cb_rem_done(cb: CallbackQuery):
 async def cb_rem_snooze(cb: CallbackQuery):
     parts = cb.data.split(":")
     link_id, minutes = int(parts[1]), int(parts[2])
+    user_id = cb.from_user.id
 
     existing = state.reminders.get(link_id)
     if existing and not existing.done():
@@ -469,10 +495,10 @@ async def cb_rem_snooze(cb: CallbackQuery):
     async def _task():
         await asyncio.sleep(minutes * 60)
         while True:
-            link = await db.get_by_id(link_id)
+            link = await db.get_by_id(link_id, user_id)
             if not link or link["status"] == "done":
                 break
-            await _send_reminder(bot, chat_id, link_id)
+            await _send_reminder(bot, chat_id, link_id, user_id)
             await asyncio.sleep(5 * 60)
         state.reminders.pop(link_id, None)
 
@@ -484,7 +510,8 @@ async def cb_rem_snooze(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("rem_later:"))
 async def cb_rem_later(cb: CallbackQuery):
     link_id = int(cb.data.split(":")[1])
-    await db.set_status(link_id, "later")
+    user_id = cb.from_user.id
+    await db.set_status(link_id, "later", user_id)
     state.reminders.pop(link_id, None)
     await cb.answer("Moved to later.")
     await cb.message.edit_text(
@@ -500,12 +527,13 @@ async def cmd_del(message: Message, command: CommandObject):
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Usage: /del &lt;id&gt;\nExample: /del 5", parse_mode="HTML")
         return
+    user_id = message.from_user.id
     link_id = int(command.args.strip())
-    link = await db.get_by_id(link_id)
+    link = await db.get_by_id(link_id, user_id)
     if not link:
         await message.answer(f"Link #{link_id} not found.")
         return
-    await db.delete_link(link_id)
+    await db.delete_link(link_id, user_id)
     title = link.get("title") or link["url"]
     await message.answer(f"🗑 Deleted <b>#{link_id}</b>: {title}", parse_mode="HTML")
 
@@ -519,12 +547,13 @@ async def cmd_title(message: Message, command: CommandObject):
     if len(parts) < 2 or not parts[0].isdigit():
         await message.answer("Usage: /title &lt;id&gt; &lt;new title&gt;", parse_mode="HTML")
         return
+    user_id = message.from_user.id
     link_id, new_title = int(parts[0]), parts[1].strip()
-    link = await db.get_by_id(link_id)
+    link = await db.get_by_id(link_id, user_id)
     if not link:
         await message.answer(f"Link #{link_id} not found.")
         return
-    await db.set_title(link_id, new_title)
+    await db.set_title(link_id, new_title, user_id)
     await message.answer(f"📝 Title updated for <b>#{link_id}</b>:\n{new_title}", parse_mode="HTML")
 
 
