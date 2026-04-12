@@ -54,6 +54,84 @@ def _group_by_root(links: list[dict]) -> dict[str, dict[str, list[dict]]]:
     return roots
 
 
+def _build_list_keyboard(
+    tag_rows: list[tuple[str, int]],
+    prefix: str = ""
+) -> InlineKeyboardMarkup | None:
+    """
+    Build inline keyboard for /list tag browser.
+    prefix="" → root level (one button per root tag + Full list button).
+    prefix="dev" → children of dev (subtag buttons + All dev button).
+    Returns None at sub-level when no children exist (leaf node).
+    """
+    if prefix == "":
+        root_counts: dict[str, int] = {}
+        for tag, count in tag_rows:
+            root = tag.split("/")[0]
+            root_counts[root] = root_counts.get(root, 0) + count
+        total = sum(root_counts.values())
+        buttons: list[list[InlineKeyboardButton]] = []
+        row: list[InlineKeyboardButton] = []
+        for root, count in sorted(root_counts.items(), key=lambda x: (-x[1], x[0])):
+            row.append(InlineKeyboardButton(text=f"{root} ({count})", callback_data=f"listb:{root}"))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        buttons.append([InlineKeyboardButton(text=f"📚 Full list ({total})", callback_data="lists:")])
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+    else:
+        child_prefix = prefix + "/"
+        child_counts: dict[str, int] = {}
+        prefix_total = 0
+        for tag, count in tag_rows:
+            if tag == prefix:
+                prefix_total += count
+            elif tag.startswith(child_prefix):
+                seg = tag[len(child_prefix):].split("/")[0]
+                path = child_prefix + seg
+                child_counts[path] = child_counts.get(path, 0) + count
+                prefix_total += count
+        if not child_counts:
+            return None  # leaf node — no subtags
+        buttons = []
+        row = []
+        for path, count in sorted(child_counts.items(), key=lambda x: (-x[1], x[0])):
+            label = path.split("/")[-1]
+            row.append(InlineKeyboardButton(text=f"{label} ({count})", callback_data=f"listb:{path}"))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+        display = prefix.split("/")[-1]
+        buttons.append([InlineKeyboardButton(
+            text=f"📂 All {display} ({prefix_total})", callback_data=f"lists:{prefix}"
+        )])
+        return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def _send_list(message: Message, links: list[dict], header: str) -> None:
+    """Build grouped link output and send via _send_chunks."""
+    parts = [header]
+    idx = 1
+    roots = _group_by_root(links)
+    for root in sorted(roots.keys()):
+        sub_map = roots[root]
+        total = sum(len(v) for v in sub_map.values())
+        parts.append(_root_header(root, total))
+        for subtag in sorted(sub_map.keys()):
+            items = sub_map[subtag]
+            relative = subtag[len(root) + 1:] if len(subtag) > len(root) else ""
+            if relative:
+                parts.append(_sub_header(relative, len(items)))
+            for link in items:
+                parts.append(_fmt_link(link, idx=idx, show_tag=False))
+                idx += 1
+    await _send_chunks(message, parts, parse_mode="HTML", disable_web_page_preview=True)
+
+
 _TELEGRAM_MAX = 4000  # Telegram hard limit is 4096; leave buffer
 
 async def _send_chunks(message: Message, parts: list[str], **kwargs):
@@ -117,30 +195,72 @@ async def cmd_help(message: Message):
 async def cmd_list(message: Message, command: CommandObject):
     user_id = message.from_user.id
     tag_filter = command.args.strip().lower() if command.args else None
-    links = await db.list_links(user_id, tag_prefix=tag_filter)
 
-    if not links:
-        label = f"under <code>{tag_filter}</code>" if tag_filter else "saved"
-        await message.answer(f"No unread links {label}.", parse_mode="HTML")
+    if tag_filter:
+        # Explicit tag arg: show links directly (no keyboard)
+        links = await db.list_links(user_id, tag_prefix=tag_filter)
+        if not links:
+            await message.answer(f"No unread links under <code>{tag_filter}</code>.", parse_mode="HTML")
+            return
+        await _send_list(message, links, f"📚 <b>{len(links)} link(s) under {tag_filter}</b>")
         return
 
-    parts = [f"📚 <b>{len(links)} link(s)</b>{' under ' + tag_filter if tag_filter else ''}\n"]
-    idx = 1
-    roots = _group_by_root(links)
-    for root in sorted(roots.keys()):
-        sub_map = roots[root]
-        total = sum(len(v) for v in sub_map.values())
-        parts.append(_root_header(root, total))
-        for subtag in sorted(sub_map.keys()):
-            items = sub_map[subtag]
-            relative = subtag[len(root) + 1:] if len(subtag) > len(root) else ""
-            if relative:
-                parts.append(_sub_header(relative, len(items)))
-            for link in items:
-                parts.append(_fmt_link(link, idx=idx, show_tag=False))
-                idx += 1
+    # No arg: show interactive tag browser
+    tag_rows = await db.get_all_tags(user_id)
+    if not tag_rows:
+        await message.answer("No unread links saved.")
+        return
+    total = sum(c for _, c in tag_rows)
+    keyboard = _build_list_keyboard(tag_rows)
+    await message.answer(
+        f"📚 <b>Browse your {total} link(s)</b>\n<i>Pick a tag:</i>",
+        parse_mode="HTML",
+        reply_markup=keyboard
+    )
 
-    await _send_chunks(message, parts, parse_mode="HTML", disable_web_page_preview=True)
+
+@router.callback_query(F.data.startswith("listb:"))
+async def cb_list_browse(cb: CallbackQuery):
+    """Navigate deeper in the tag tree, or show links at a leaf node."""
+    tag = cb.data[len("listb:"):]
+    user_id = cb.from_user.id
+    tag_rows = await db.get_all_tags(user_id)
+    keyboard = _build_list_keyboard(tag_rows, prefix=tag)
+
+    if keyboard is not None:
+        # Has subtags — edit message in place with new keyboard
+        await cb.answer()
+        await cb.message.edit_text(
+            f"📁 <b>{tag}</b>\n<i>Pick a subtag:</i>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+        return
+
+    # Leaf node — show links directly
+    links = await db.list_links(user_id, tag_prefix=tag)
+    await cb.answer()
+    await cb.message.edit_reply_markup(reply_markup=None)
+    if not links:
+        await cb.message.answer(f"No unread links under <code>{tag}</code>.", parse_mode="HTML")
+        return
+    await _send_list(cb.message, links, f"📚 <b>{len(links)} link(s) under {tag}</b>")
+
+
+@router.callback_query(F.data.startswith("lists:"))
+async def cb_list_show(cb: CallbackQuery):
+    """Show all links under a tag prefix, or the full list if prefix is empty."""
+    tag = cb.data[len("lists:"):]  # empty string = full list
+    user_id = cb.from_user.id
+    links = await db.list_links(user_id, tag_prefix=tag if tag else None)
+    await cb.answer()
+    await cb.message.edit_reply_markup(reply_markup=None)
+    if not links:
+        label = f"under <code>{tag}</code>" if tag else "saved"
+        await cb.message.answer(f"No unread links {label}.", parse_mode="HTML")
+        return
+    header = f"📚 <b>{len(links)} link(s) under {tag}</b>" if tag else f"📚 <b>{len(links)} link(s)</b>"
+    await _send_list(cb.message, links, header)
 
 
 @router.message(Command("review"))
