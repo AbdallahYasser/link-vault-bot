@@ -54,6 +54,22 @@ def _group_by_root(links: list[dict]) -> dict[str, dict[str, list[dict]]]:
     return roots
 
 
+_TELEGRAM_MAX = 4000  # Telegram hard limit is 4096; leave buffer
+
+async def _send_chunks(message: Message, parts: list[str], **kwargs):
+    """Send a list of text parts as one or more messages, never splitting mid-part."""
+    chunk = ""
+    for part in parts:
+        segment = part + "\n"
+        if chunk and len(chunk) + len(segment) > _TELEGRAM_MAX:
+            await message.answer(chunk.rstrip(), **kwargs)
+            chunk = segment
+        else:
+            chunk += segment
+    if chunk.strip():
+        await message.answer(chunk.rstrip(), **kwargs)
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
@@ -124,7 +140,7 @@ async def cmd_list(message: Message, command: CommandObject):
                 parts.append(_fmt_link(link, idx=idx, show_tag=False))
                 idx += 1
 
-    await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
+    await _send_chunks(message, parts, parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.message(Command("review"))
@@ -154,7 +170,7 @@ async def cmd_review(message: Message):
                 parts.append(f"{idx}. {s} <b>#{link['user_link_id']}</b>\n{title_line}\n  <a href='{link['url']}'>open</a>")
                 idx += 1
 
-    await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
+    await _send_chunks(message, parts, parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.message(Command("find"))
@@ -170,7 +186,7 @@ async def cmd_find(message: Message, command: CommandObject):
     parts = [f"🔍 <b>{len(links)} result(s) for '{command.args}'</b>\n"]
     for idx, link in enumerate(links, 1):
         parts.append(_fmt_link(link, idx=idx))
-    await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
+    await _send_chunks(message, parts, parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.message(Command("tags"))
@@ -303,7 +319,7 @@ async def cmd_archive(message: Message, command: CommandObject):
     parts = [f"🗄 <b>Archive — {len(links)} link(s)</b>\n"]
     for idx, link in enumerate(links, 1):
         parts.append(_fmt_link(link, idx=idx))
-    await message.answer("\n".join(parts), parse_mode="HTML", disable_web_page_preview=True)
+    await _send_chunks(message, parts, parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.message(Command("duplicates"))
