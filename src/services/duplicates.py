@@ -1,7 +1,10 @@
+from src.utils.tag_cleaner import clean_tag
+
+
 def group_similar_tags(tags: list[str]) -> list[list[str]]:
-    """Group tags that normalize to the same string (spaces ↔ underscores, case-insensitive)."""
+    """Group tags that normalize to the same string (spaces ↔ underscores, case-insensitive, invisible chars stripped)."""
     def _normalize(t: str) -> str:
-        return t.lower().replace(" ", "_").replace("-", "_")
+        return clean_tag(t).replace(" ", "_").replace("-", "_")
 
     buckets: dict[str, list[str]] = {}
     for tag in tags:

@@ -1,6 +1,7 @@
 import logging
 from src.config import GROQ_KEYS, OPENROUTER_API_KEY
 from src.utils.key_rotator import KeyRotator
+from src.utils.tag_cleaner import clean_tag
 
 logger = logging.getLogger(__name__)
 _groq_rotator = KeyRotator(GROQ_KEYS, "Groq")
@@ -68,8 +69,8 @@ async def _groq_tag(prompt: str) -> str:
                 max_tokens=30,
                 temperature=0.2,
             )
-            tag = resp.choices[0].message.content.strip().lower()
-            tag = tag.strip("/").replace(" ", "_")
+            tag = clean_tag(resp.choices[0].message.content)
+            tag = tag.replace(" ", "_")
             return tag or "uncategorized"
         except RateLimitError:
             logger.warning("Groq tag key rate limited, rotating")
@@ -92,5 +93,5 @@ async def _openrouter_tag(prompt: str) -> str:
         )
     if resp.status_code != 200:
         raise RuntimeError(f"OpenRouter error: {resp.status_code}")
-    tag = resp.json()["choices"][0]["message"]["content"].strip().lower()
-    return tag.strip("/").replace(" ", "_") or "uncategorized"
+    tag = clean_tag(resp.json()["choices"][0]["message"]["content"])
+    return tag.replace(" ", "_") or "uncategorized"

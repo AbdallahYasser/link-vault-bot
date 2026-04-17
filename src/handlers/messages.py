@@ -8,6 +8,7 @@ from src.db import links as db
 from src.services.tagger import suggest_tag
 from src.utils.url_normalizer import normalize
 from src.utils.platform import detect
+from src.utils.tag_cleaner import clean_tag
 from src import state
 
 router = Router()
@@ -174,13 +175,13 @@ async def handle_plain_text(message: Message):
 
     elif user_id in state.pending_tags:
         link_id = state.pending_tags.pop(user_id)
-        new_tag = message.text.strip().lower().strip("/")
+        new_tag = clean_tag(message.text)
         await db.set_tag(link_id, new_tag, user_id)
         await message.answer(f"✅ Tag updated to <code>{new_tag}</code> for <b>#{link_id}</b>", parse_mode="HTML")
 
     elif user_id in state.pending_import_tag:
         state.pending_import_tag.discard(user_id)
-        override_tag = message.text.strip().lower().strip("/")
+        override_tag = clean_tag(message.text)
         links = state.pending_imports.pop(user_id, None)
         if not links:
             await message.answer("Nothing to import.")

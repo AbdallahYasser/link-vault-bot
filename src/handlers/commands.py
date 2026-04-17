@@ -9,6 +9,7 @@ from aiogram import F
 
 from src.db import links as db
 from src.services.tagger import suggest_tag, retag_all
+from src.utils.tag_cleaner import clean_tag
 from src import state
 
 router = Router()
@@ -556,7 +557,7 @@ async def cmd_tag(message: Message, command: CommandObject):
         await message.answer("Usage: /tag &lt;id&gt; &lt;tag&gt;\nExample: /tag 42 dev/react", parse_mode="HTML")
         return
     user_id = message.from_user.id
-    link_id, new_tag = int(parts[0]), parts[1].lower().strip("/")
+    link_id, new_tag = int(parts[0]), clean_tag(parts[1])
     link = await db.get_by_id(link_id, user_id)
     if not link:
         await message.answer(f"Link #{link_id} not found.")
