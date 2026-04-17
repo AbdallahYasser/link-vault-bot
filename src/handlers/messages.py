@@ -1,4 +1,5 @@
 import re
+import json
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -115,6 +116,34 @@ async def cb_tag_type(cb: CallbackQuery):
     await cb.message.edit_reply_markup(reply_markup=None)
 
 
+@router.message(F.document)
+async def handle_document(message: Message):
+    doc = message.document
+    if not doc.file_name or not doc.file_name.endswith(".json"):
+        return
+    data = await message.bot.download(doc)
+    try:
+        payload = json.loads(data.read())
+    except Exception:
+        await message.answer("❌ Couldn't parse that file.")
+        return
+    if not isinstance(payload, dict) or payload.get("vault_export") != 1:
+        return  # silently ignore — not a vault file
+    links = payload.get("links", [])
+    if not links:
+        await message.answer("📦 That export has no links.")
+        return
+    state.pending_imports[message.from_user.id] = links
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Keep original tags", callback_data="imp_keep:")],
+        [InlineKeyboardButton(text="🏷 Put all under one tag", callback_data="imp_retag:")],
+    ])
+    await message.answer(
+        f"📦 <b>{len(links)} link(s)</b> ready to import.\nHow would you like to tag them?",
+        parse_mode="HTML", reply_markup=keyboard
+    )
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_plain_text(message: Message):
     user_id = message.from_user.id
@@ -148,6 +177,30 @@ async def handle_plain_text(message: Message):
         new_tag = message.text.strip().lower().strip("/")
         await db.set_tag(link_id, new_tag, user_id)
         await message.answer(f"✅ Tag updated to <code>{new_tag}</code> for <b>#{link_id}</b>", parse_mode="HTML")
+
+    elif user_id in state.pending_import_tag:
+        state.pending_import_tag.discard(user_id)
+        override_tag = message.text.strip().lower().strip("/")
+        links = state.pending_imports.pop(user_id, None)
+        if not links:
+            await message.answer("Nothing to import.")
+            return
+        imported = skipped = 0
+        for link in links:
+            url = link.get("url", "")
+            if not url:
+                continue
+            if await db.get_by_url(url, user_id):
+                skipped += 1
+                continue
+            tag_val = override_tag or link.get("tag", "uncategorized")
+            await db.save(url, link.get("original_url", url), link.get("title", ""),
+                          link.get("platform", "article"), tag_val, user_id)
+            imported += 1
+        parts = [f"✅ Imported <b>{imported}</b> link(s)"]
+        if skipped:
+            parts.append(f"⚠️ Skipped <b>{skipped}</b> duplicate(s)")
+        await message.answer("\n".join(parts), parse_mode="HTML")
 
     else:
         await message.answer("Send a URL to save it, or use /help for commands.")

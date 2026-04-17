@@ -1,8 +1,10 @@
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
 from aiogram import Router, Bot
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BufferedInputFile
 from aiogram import F
 
 from src.db import links as db
@@ -56,10 +58,14 @@ def _group_by_root(links: list[dict]) -> dict[str, dict[str, list[dict]]]:
 
 def _build_list_keyboard(
     tag_rows: list[tuple[str, int]],
-    prefix: str = ""
+    prefix: str = "",
+    browse_cb: str = "listb",
+    show_cb: str = "lists",
+    show_all_label: str = "📚 Full list",
+    show_sub_label: str = "📂 All",
 ) -> InlineKeyboardMarkup | None:
     """
-    Build inline keyboard for /list tag browser.
+    Build inline keyboard for /list (and /export) tag browser.
     prefix="" → root level (one button per root tag + Full list button).
     prefix="dev" → children of dev (subtag buttons + All dev button).
     Returns None at sub-level when no children exist (leaf node).
@@ -73,13 +79,13 @@ def _build_list_keyboard(
         buttons: list[list[InlineKeyboardButton]] = []
         row: list[InlineKeyboardButton] = []
         for root, count in sorted(root_counts.items(), key=lambda x: (-x[1], x[0])):
-            row.append(InlineKeyboardButton(text=f"{root} ({count})", callback_data=f"listb:{root}"))
+            row.append(InlineKeyboardButton(text=f"{root} ({count})", callback_data=f"{browse_cb}:{root}"))
             if len(row) == 2:
                 buttons.append(row)
                 row = []
         if row:
             buttons.append(row)
-        buttons.append([InlineKeyboardButton(text=f"📚 Full list ({total})", callback_data="lists:")])
+        buttons.append([InlineKeyboardButton(text=f"{show_all_label} ({total})", callback_data=f"{show_cb}:")])
         return InlineKeyboardMarkup(inline_keyboard=buttons)
     else:
         child_prefix = prefix + "/"
@@ -99,7 +105,7 @@ def _build_list_keyboard(
         row = []
         for path, count in sorted(child_counts.items(), key=lambda x: (-x[1], x[0])):
             label = path.split("/")[-1]
-            row.append(InlineKeyboardButton(text=f"{label} ({count})", callback_data=f"listb:{path}"))
+            row.append(InlineKeyboardButton(text=f"{label} ({count})", callback_data=f"{browse_cb}:{path}"))
             if len(row) == 2:
                 buttons.append(row)
                 row = []
@@ -107,7 +113,7 @@ def _build_list_keyboard(
             buttons.append(row)
         display = prefix.split("/")[-1]
         buttons.append([InlineKeyboardButton(
-            text=f"📂 All {display} ({prefix_total})", callback_data=f"lists:{prefix}"
+            text=f"{show_sub_label} {display} ({prefix_total})", callback_data=f"{show_cb}:{prefix}"
         )])
         return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -186,7 +192,10 @@ async def cmd_help(message: Message):
         "/pin &lt;id&gt; — move to top\n"
         "/unpin &lt;id&gt; — back to unread\n\n"
         "<b>Duplicates</b>\n"
-        "/duplicates — find similar tags and merge them",
+        "/duplicates — find similar tags and merge them\n\n"
+        "<b>Export / Import</b>\n"
+        "/export — save links to a JSON file (pick by tag)\n"
+        "Send a vault JSON file → import links",
         parse_mode="HTML"
     )
 
@@ -261,6 +270,166 @@ async def cb_list_show(cb: CallbackQuery):
         return
     header = f"📚 <b>{len(links)} link(s) under {tag}</b>" if tag else f"📚 <b>{len(links)} link(s)</b>"
     await _send_list(cb.message, links, header)
+
+
+# ── Export ────────────────────────────────────────────────────────────────────
+
+async def _do_export(cb: CallbackQuery, tag_filter: str | None, user_id: int):
+    links = await db.list_links(user_id, tag_prefix=tag_filter)
+    if not links:
+        await cb.answer("No links to export.")
+        await cb.message.edit_reply_markup(reply_markup=None)
+        return
+    payload = {
+        "vault_export": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "tag_filter": tag_filter or "all",
+        "links": [
+            {
+                "url": l["url"],
+                "original_url": l.get("original_url", l["url"]),
+                "title": l.get("title", ""),
+                "tag": l["tag"],
+                "platform": l.get("platform", "article"),
+            }
+            for l in links
+        ],
+    }
+    data = json.dumps(payload, ensure_ascii=False, indent=2).encode()
+    slug = (tag_filter or "all").replace("/", "_")
+    await cb.answer()
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.message.answer_document(
+        BufferedInputFile(data, filename=f"vault_{slug}.json"),
+        caption=f"📦 <b>{len(links)} link(s)</b>{' — ' + tag_filter if tag_filter else ''} exported",
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("export"))
+async def cmd_export(message: Message):
+    user_id = message.from_user.id
+    tag_rows = await db.get_all_tags(user_id)
+    if not tag_rows:
+        await message.answer("No links to export.")
+        return
+    total = sum(c for _, c in tag_rows)
+    keyboard = _build_list_keyboard(
+        tag_rows, browse_cb="expb", show_cb="exps",
+        show_all_label="📦 Export all", show_sub_label="📦 Export"
+    )
+    await message.answer(
+        f"📦 <b>Export {total} link(s)</b>\n<i>Pick a tag:</i>",
+        parse_mode="HTML", reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("expb:"))
+async def cb_export_browse(cb: CallbackQuery):
+    tag = cb.data[len("expb:"):]
+    user_id = cb.from_user.id
+    tag_rows = await db.get_all_tags(user_id)
+    keyboard = _build_list_keyboard(
+        tag_rows, prefix=tag, browse_cb="expb", show_cb="exps",
+        show_all_label="📦 Export all", show_sub_label="📦 Export"
+    )
+    if keyboard is not None:
+        await cb.answer()
+        await cb.message.edit_text(
+            f"📁 <b>{tag}</b>\n<i>Pick a subtag:</i>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+        return
+    await _do_export(cb, tag, user_id)
+
+
+@router.callback_query(F.data.startswith("exps:"))
+async def cb_export_show(cb: CallbackQuery):
+    tag = cb.data[len("exps:"):]
+    user_id = cb.from_user.id
+    await _do_export(cb, tag if tag else None, user_id)
+
+
+# ── Import ────────────────────────────────────────────────────────────────────
+
+async def _do_import(message: Message, links: list[dict], user_id: int, override_tag: str | None = None):
+    imported = skipped = 0
+    for link in links:
+        url = link.get("url", "")
+        if not url:
+            continue
+        if await db.get_by_url(url, user_id):
+            skipped += 1
+            continue
+        tag = override_tag or link.get("tag", "uncategorized")
+        await db.save(
+            url, link.get("original_url", url), link.get("title", ""),
+            link.get("platform", "article"), tag, user_id
+        )
+        imported += 1
+    parts = [f"✅ Imported <b>{imported}</b> link(s)"]
+    if skipped:
+        parts.append(f"⚠️ Skipped <b>{skipped}</b> duplicate(s)")
+    await message.answer("\n".join(parts), parse_mode="HTML")
+
+
+@router.callback_query(F.data == "imp_keep:")
+async def cb_import_keep(cb: CallbackQuery):
+    user_id = cb.from_user.id
+    links = state.pending_imports.pop(user_id, None)
+    if not links:
+        await cb.answer("Nothing to import.")
+        return
+    await cb.answer()
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await _do_import(cb.message, links, user_id)
+
+
+@router.callback_query(F.data == "imp_retag:")
+async def cb_import_retag(cb: CallbackQuery):
+    user_id = cb.from_user.id
+    if user_id not in state.pending_imports:
+        await cb.answer("Nothing to import.")
+        return
+    await cb.answer()
+    tag_rows = await db.get_all_tags(user_id)
+    buttons = []
+    row = []
+    for tag, _ in tag_rows:
+        row.append(InlineKeyboardButton(text=tag, callback_data=f"imp_tag:{tag}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="✏️ Type new tag", callback_data="imp_type:")])
+    await cb.message.edit_text(
+        "Pick a tag for all imported links:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+
+
+@router.callback_query(F.data.startswith("imp_tag:"))
+async def cb_import_use_tag(cb: CallbackQuery):
+    tag = cb.data[len("imp_tag:"):]
+    user_id = cb.from_user.id
+    links = state.pending_imports.pop(user_id, None)
+    if not links:
+        await cb.answer("Nothing to import.")
+        return
+    await cb.answer()
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await _do_import(cb.message, links, user_id, override_tag=tag)
+
+
+@router.callback_query(F.data == "imp_type:")
+async def cb_import_type_tag(cb: CallbackQuery):
+    user_id = cb.from_user.id
+    state.pending_import_tag.add(user_id)
+    await cb.answer()
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.message.answer("Send the tag for all imported links:")
 
 
 @router.message(Command("review"))
