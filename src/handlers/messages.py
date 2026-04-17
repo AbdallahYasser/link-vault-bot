@@ -19,11 +19,11 @@ URL_RE = re.compile(r'https?://[^\s]+')
 def _link_keyboard(link_id: int, suggested_tag: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Keep tag", callback_data=f"tag_ok:{link_id}"),
-            InlineKeyboardButton(text="✏️ Change tag", callback_data=f"tag_edit:{link_id}"),
+            InlineKeyboardButton(text="✅ Tag looks good", callback_data=f"tag_ok:{link_id}"),
+            InlineKeyboardButton(text="🏷 Change tag", callback_data=f"tag_edit:{link_id}"),
         ],
         [
-            InlineKeyboardButton(text="📝 Edit title", callback_data=f"title_edit:{link_id}"),
+            InlineKeyboardButton(text="✏️ Edit title", callback_data=f"title_edit:{link_id}"),
         ]
     ])
 
@@ -53,8 +53,8 @@ async def handle_url(message: Message):
         "platform": platform,
     }
     await message.answer(
-        "🔗 Got it! Send me a title for this link.\n"
-        "<i>(type <code>-</code> to skip)</i>",
+        "🔗 Got it!\n"
+        "Send a title for this link, or type <code>-</code> to skip.",
         parse_mode="HTML"
     )
 
@@ -84,7 +84,7 @@ async def cb_tag_edit(cb: CallbackQuery):
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await cb.message.answer(
-        f"Choose a tag for <b>#{link_id}</b> or type a new one:",
+        f"🏷 Pick a tag for <b>#{link_id}</b>, or tap <i>Type new tag</i> to enter one:",
         parse_mode="HTML",
         reply_markup=markup
     )
@@ -159,9 +159,9 @@ async def handle_plain_text(message: Message):
         link_id = await db.save(data["url"], data["original_url"], title, data["platform"], suggested, user_id)
 
         await status_msg.edit_text(
-            f"✅ Saved <b>#{link_id}</b>\n"
-            f"📎 {title or '(no title)'}\n"
-            f"🏷 <code>{suggested}</code>",
+            f"✅ Saved as <b>#{link_id}</b>\n"
+            f"📎 {title or '<i>no title</i>'}\n"
+            f"🏷 Suggested tag: <code>{suggested}</code>",
             parse_mode="HTML",
             reply_markup=_link_keyboard(link_id, suggested)
         )

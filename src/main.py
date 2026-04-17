@@ -26,21 +26,22 @@ async def main():
     bot = Bot(token=TELEGRAM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
     await bot.set_my_commands([
-        BotCommand(command="list",       description="All unread links (or /list <tag>)"),
-        BotCommand(command="review",     description="Weekend review — grouped by topic"),
-        BotCommand(command="find",       description="Search — /find <keyword>"),
-        BotCommand(command="tags",       description="Your full tag tree"),
-        BotCommand(command="reading",    description="Start timer — /reading <id> <minutes>"),
-        BotCommand(command="done",       description="Archive a link — /done <id>"),
-        BotCommand(command="later",      description="Snooze to end of list — /later <id>"),
+        BotCommand(command="list",       description="Browse links by tag"),
+        BotCommand(command="find",       description="Search by title or tag — /find <keyword>"),
+        BotCommand(command="review",     description="All links grouped by topic"),
+        BotCommand(command="archive",    description="Links you've finished"),
+        BotCommand(command="tags",       description="Your tag tree with counts"),
+        BotCommand(command="tag",        description="Change tag — /tag <id> <tag>"),
+        BotCommand(command="retag",      description="AI retag — /retag <id> or retag all"),
+        BotCommand(command="duplicates", description="Find and merge similar tags"),
+        BotCommand(command="done",       description="Mark as finished — /done <id>"),
         BotCommand(command="pin",        description="Pin to top — /pin <id>"),
-        BotCommand(command="tag",        description="Set tag — /tag <id> <tag>"),
-        BotCommand(command="retag",      description="AI retag — /retag <id> or all"),
-        BotCommand(command="title",       description="Set title — /title <id> <new title>"),
+        BotCommand(command="later",      description="Snooze to end of list — /later <id>"),
+        BotCommand(command="title",      description="Update title — /title <id> <text>"),
         BotCommand(command="del",        description="Delete a link — /del <id>"),
-        BotCommand(command="duplicates", description="Scan and show all duplicate groups"),
-        BotCommand(command="archive",    description="Browse done links"),
-        BotCommand(command="help",       description="Full command reference"),
+        BotCommand(command="export",     description="Download links as a .json file"),
+        BotCommand(command="reading",    description="Reading timer — /reading <id> <minutes>"),
+        BotCommand(command="help",       description="All commands"),
     ])
     logger.info("Bot commands registered")
 
